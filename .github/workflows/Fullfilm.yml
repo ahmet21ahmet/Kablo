@@ -1,5 +1,5 @@
 # İş akışının adı
-name: M3U Çalma Listesi Oluşturucu
+name: film Çalma Listesi Oluşturucu
 
 # Bu iş akışının ne zaman çalışacağını belirleyen tetikleyiciler
 on:
@@ -38,7 +38,7 @@ jobs:
       - name: Bağımlılıkları Yükle
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4
+          pip install requirements.txt
 
       # 4. Adım: M3U dosyasını oluşturan ana Python betiğini çalıştırır
       # Betik hata verirse, iş akışı burada durur ve sana haber verir. Bu daha güvenlidir.
