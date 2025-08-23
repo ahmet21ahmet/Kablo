@@ -1,0 +1,63 @@
+# .github/workflows/build-playlist.yml
+
+name: M3U Çalma Listesi Oluşturucu
+
+# Bu workflow'un ne zaman çalışacağını belirleyen tetikleyiciler
+on:
+  # GitHub Actions arayüzünden manuel olarak çalıştırma imkanı tanır
+  workflow_dispatch:
+
+  # Belirli bir zamanlamaya göre otomatik çalıştırır
+  schedule:
+    # Her gün gece yarısı (UTC) çalıştırır
+    # Cron zamanlamasını https://crontab.guru/ adresinden düzenleyebilirsiniz
+    - cron: '0 0 * * *'
+
+# Workflow'da çalışacak işler (jobs)
+jobs:
+  build-playlist:
+    # İşin çalışacağı sanal makine ortamı
+    runs-on: ubuntu-latest
+
+    # Bu işin depoya yazma izni olması gerektiğini belirtir
+    permissions:
+      contents: write
+
+    # İşin adımları
+    steps:
+      # 1. Adım: Depodaki kodları sanal makineye indirir
+      - name: Depoyu Klonla (Checkout)
+        uses: actions/checkout@v4
+
+      # 2. Adım: Python ortamını kurar
+      - name: Python'u Kur
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10' # İstediğiniz bir Python sürümünü belirtebilirsiniz
+
+      # 3. Adım: Gerekli Python kütüphanelerini yükler
+      - name: Bağımlılıkları Yükle
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      # 4. Adım: M3U dosyasını oluşturan ana Python betiğini çalıştırır
+      # Betiğinizin adının "main.py" olduğunu varsayıyorum. Farklıysa burayı güncelleyin.
+      - name: Betiği Çalıştır ve M3U Dosyasını Oluştur
+        run: python deneme.py
+
+      # 5. Adım: Oluşturulan dosyayı depoya commit'ler ve push'lar
+      - name: Değişiklikleri Depoya Gönder (Commit & Push)
+        run: |
+          # Git için bot kullanıcısını yapılandır
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # Oluşturulan dosyayı takip listesine ekle
+          git add yelon.m3u
+          
+          # Sadece bir değişiklik varsa commit at ve boş commit'leri engelle
+          git diff --staged --quiet || git commit -m "Güncel: M3U çalma listesi otomatik olarak güncellendi"
+          
+          # Değişiklikleri ana dala (main/master) gönder
+          git push
