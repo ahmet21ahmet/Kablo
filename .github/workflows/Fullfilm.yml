@@ -10,7 +10,6 @@ on:
   # Belirli bir zamanlamaya göre otomatik çalıştırır
   schedule:
     # Her gün gece yarısı (UTC) çalıştırır
-    # Cron zamanlamasını https://crontab.guru/ adresinden düzenleyebilirsiniz
     - cron: '0 0 * * *'
 
 # Workflow'da çalışacak işler (jobs)
@@ -33,7 +32,7 @@ jobs:
       - name: Python'u Kur
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10' # İstediğiniz bir Python sürümünü belirtebilirsiniz
+          python-version: '3.10'
 
       # 3. Adım: Gerekli Python kütüphanelerini yükler
       - name: Bağımlılıkları Yükle
@@ -42,22 +41,33 @@ jobs:
           pip install requests beautifulsoup4
 
       # 4. Adım: M3U dosyasını oluşturan ana Python betiğini çalıştırır
-      # Betiğinizin adının "main.py" olduğunu varsayıyorum. Farklıysa burayı güncelleyin.
+      # 'continue-on-error: true' sayesinde betik hata verse bile workflow durmaz.
       - name: Betiği Çalıştır ve M3U Dosyasını Oluştur
+        id: build_step
         run: python deneme.py
+        continue-on-error: true
 
-      # 5. Adım: Oluşturulan dosyayı depoya commit'ler ve push'lar
+      # 5. Adım: Betiğin başarılı olup olmadığını kontrol et
+      - name: Betik sonucunu kontrol et
+        if: steps.build_step.outcome == 'failure'
+        run: echo "Python betiği başarısız oldu. Dosya oluşturulmadı."
+
+      # 6. Adım: Oluşturulan dosyayı depoya commit'ler ve push'lar
+      # Sadece betik başarılı olduysa ve dosya mevcutsa çalışır.
       - name: Değişiklikleri Depoya Gönder (Commit & Push)
+        if: steps.build_step.outcome == 'success'
         run: |
           # Git için bot kullanıcısını yapılandır
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           
-          # Oluşturulan dosyayı takip listesine ekle
-          git add yelon.m3u
-          
-          # Sadece bir değişiklik varsa commit at ve boş commit'leri engelle
-          git diff --staged --quiet || git commit -m "Güncel: M3U çalma listesi otomatik olarak güncellendi"
-          
-          # Değişiklikleri ana dala (main/master) gönder
-          git push
+          # Sadece dosya varsa takip listesine ekle
+          if [ -f yelon.m3u ]; then
+            git add yelon.m3u
+            # Sadece bir değişiklik varsa commit at ve boş commit'leri engelle
+            git diff --staged --quiet || git commit -m "Otomatik Güncelleme: M3U çalma listesi güncellendi"
+            # Değişiklikleri ana dala (main/master) gönder
+            git push
+          else
+            echo "yelon.m3u dosyası bulunamadı. Commit atılmayacak."
+          fi
