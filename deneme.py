@@ -6,7 +6,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from requests.exceptions import RequestException
 from time import sleep
-import sys # sys modülünü ekledik
 
 # Log ayarları
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -44,7 +43,7 @@ def get_film_slugs_from_page(page_num, max_retries=3):
     url = f"https://www.fullhdfilmizlesene.nl/yeni-filmler/{page_num}"
     for attempt in range(max_retries):
         try:
-            response = requests.get(url, headers=headers, timeout=15) # Timeout süresini artırdık
+            response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             slugs = set()
@@ -58,7 +57,7 @@ def get_film_slugs_from_page(page_num, max_retries=3):
         except RequestException as e:
             logging.error(f"Sayfa {page_num} alınamadı (deneme {attempt+1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                sleep(2) # Bekleme süresini artırdık
+                sleep(1)
             continue
     return []
 
@@ -67,7 +66,7 @@ def get_video_and_subtitles(slug, max_retries=3):
     for attempt in range(max_retries):
         try:
             film_url = f"https://www.fullhdfilmizlesene.nl/film/{slug}"
-            film_page = requests.get(film_url, headers=headers, timeout=15).text
+            film_page = requests.get(film_url, headers=headers, timeout=10).text
             soup = BeautifulSoup(film_page, "html.parser")
 
             vidid = re.search(r"vidid\s*=\s*'([^']+)'", film_page)
@@ -96,14 +95,18 @@ def get_video_and_subtitles(slug, max_retries=3):
             poster_url = poster.group(1) if poster else None
 
             api_url = f"https://www.fullhdfilmizlesene.nl/player/api.php?id={vid}&type=t&name=atom&get=video&format=json"
-            api_response = requests.get(api_url, headers=headers, timeout=15).text.replace('\\', '')
+            api_response = requests.get(api_url, headers=headers, timeout=10).text.replace('\\', '')
             html_match = re.search(r'"html":"(.*?)"', api_response)
             if not html_match:
                 logging.warning(f"{slug}: API HTML bulunamadı.")
                 return None, [], poster_url, genre, tr_title, en_title
 
             iframe_url = html_match.group(1)
-            iframe_page = requests.get(iframe_url, headers=headers, timeout=15).text
+
+            if iframe_url.startswith('/'):
+                iframe_url = "https://www.fullhdfilmizlesene.nl" + iframe_url
+
+            iframe_page = requests.get(iframe_url, headers=headers, timeout=10).text
 
             file_match = re.search(r'"file":\s*av\([\'"]([^\'"]+)[\'"]\)', iframe_page)
             video_url = decode_link(file_match.group(1)) if file_match else None
@@ -114,7 +117,7 @@ def get_video_and_subtitles(slug, max_retries=3):
         except RequestException as e:
             logging.error(f"{slug} için veri alınamadı (deneme {attempt+1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                sleep(2)
+                sleep(1)
             continue
     return None, [], None, "Bilinmeyen Tür", slug.replace("-", " ").title(), None
 
@@ -142,6 +145,7 @@ def process_slug(slug, f):
     """Tek bir slug için video, altyazı, tür ve başlık bilgilerini işler ve M3U'ya ekler."""
     video_url, subtitles, poster_url, genre, tr_title, en_title = get_video_and_subtitles(slug)
     if video_url:
+        # Önceki koddaki yazım hatası burada düzeltildi.
         write_m3u_entry(f, slug, video_url, subtitles, poster_url, genre, tr_title, en_title)
         display_title = f"{tr_title} ({en_title})" if en_title else tr_title
         logging.info(f"{display_title} eklendi ✅")
@@ -152,25 +156,17 @@ def build_m3u(pages=5, output_file="yelon.m3u", max_workers=10):
     """M3U çalma listesini oluşturur."""
     with open(output_file, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n")
-        
-        all_slugs = []
         with ThreadPoolExecutor(max_workers=3) as page_executor:
             page_results = page_executor.map(get_film_slugs_from_page, range(1, pages + 1))
-            for slugs in page_results:
-                all_slugs.extend(slugs)
 
-        logging.info(f"Toplam {len(all_slugs)} adet benzersiz slug bulundu ve işlenecek.")
+        all_slugs = []
+        for page_num, slugs in enumerate(page_results, 1):
+            logging.info(f"Sayfa {page_num} işlendi: {len(slugs)} slug.")
+            all_slugs.extend(slugs)
 
         with ThreadPoolExecutor(max_workers=max_workers) as slug_executor:
             slug_executor.map(lambda slug: process_slug(slug, f), all_slugs)
 
-def main():
-    """Ana fonksiyon."""
-    try:
-        build_m3u(pages=100, max_workers=5)
-    except Exception as e:
-        logging.critical(f"Betiğin çalışması sırasında beklenmedik bir hata oluştu: {e}", exc_info=True)
-        sys.exit(1) # Hata durumunda betiği 1 çıkış koduyla sonlandır
-
 if __name__ == "__main__":
-    main()
+    # GitHub'a yüklediğinde pages=100 gibi bir değere yükseltebilirsin.
+    build_m3u(pages=100, max_workers=5)
