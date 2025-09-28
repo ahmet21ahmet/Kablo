@@ -34,7 +34,7 @@ jobs:
 
       # DƏYİŞDİRİLDİ: Selenium ilə işləyən yeni script-i işə salır
       - name: Linkləri çıxarma script-ini işə sal
-        run: python advanced_stream_extractor.py
+        run: python extractor.py
 
       - name: Yenilənmiş faylları commit et
         uses: stefanzweifel/git-auto-commit-action@v5
