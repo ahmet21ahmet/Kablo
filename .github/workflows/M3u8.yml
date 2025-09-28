@@ -1,33 +1,43 @@
-name: Update m3u8 Links
+name: m3u8 Linklərini Yenilə
 
 on:
   schedule:
-    - cron: "*/90 * * * *"  # hər 90 dəqiqədə bir işə düşəcək
-  workflow_dispatch:        # İstəyə bağlı əl ilə də işə salmaq olur
+    # Hər 2 saatdan bir avtomatik işə düşür.
+    # 90 dəqiqə cron-da standart olmadığı üçün bu daha etibarlı bir alternativdir.
+    - cron: '0 */2 * * *'
+  
+  # GitHub Actions panelindən əl ilə işə salmaq üçün
+  workflow_dispatch:
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Repository-ni klonla
+        uses: actions/checkout@v4
 
-      - name: Setup Python 3.10
-        uses: actions/setup-python@v4
+      - name: Python 3.10 versiyasını qur
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      # YENİ ADDIM: Selenium üçün Chrome və uyğun ChromeDriver-ı avtomatik qurur
+      - name: Chrome və ChromeDriver'ı Qur
+        uses: browser-actions/setup-chrome@v1
+      
+      # DƏYİŞDİRİLDİ: Asılılıqları requirements.txt faylından yükləyir
+      - name: Asılılıqları yüklə
         run: |
-          pip install --upgrade pip
-          pip install requests yt-dlp
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Run extract script
-        run: python extract_m3u8.py
+      # DƏYİŞDİRİLDİ: Selenium ilə işləyən yeni script-i işə salır
+      - name: Linkləri çıxarma script-ini işə sal
+        run: python advanced_stream_extractor.py
 
-      - name: Commit updated files
+      - name: Yenilənmiş faylları commit et
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 m3u8 linklər yeniləndi"
-          branch: main   # lazım olsa branch adını dəyiş
+          commit_message: "🔁 m3u8 linkləri avtomatik yeniləndi"
+          branch: main
