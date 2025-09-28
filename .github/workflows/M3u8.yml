@@ -1,43 +1,51 @@
-name: m3u8 Linklərini Yenilə
+# İş akışının adı (GitHub Actions sekmesinde bu isimle görünecek)
+name: Canlı Yayın Linklerini Güncelle
 
 on:
+  # Zamanlanmış görev: Bu ayar, botu her 2 saatte bir otomatik olarak çalıştırır.
   schedule:
-    # Hər 2 saatdan bir avtomatik işə düşür.
-    # 90 dəqiqə cron-da standart olmadığı üçün bu daha etibarlı bir alternativdir.
     - cron: '0 */2 * * *'
   
-  # GitHub Actions panelindən əl ilə işə salmaq üçün
+  # Manuel çalıştırma: GitHub Actions panelinden "Run workflow" butonuyla elle başlatmanı sağlar.
   workflow_dispatch:
 
 jobs:
-  update:
+  # "guncelle" adında bir görev tanımlıyoruz.
+  guncelle:
+    # Görevin çalışacağı sanal makine: en güncel Ubuntu versiyonu.
     runs-on: ubuntu-latest
 
+    # Görevin adımları:
     steps:
-      - name: Repository-ni klonla
+      # 1. Adım: Repository'deki kodları sanal makineye kopyalar.
+      - name: Proje dosyalarını kopyala
         uses: actions/checkout@v4
 
-      - name: Python 3.10 versiyasını qur
+      # 2. Adım: Belirtilen Python versiyonunu (3.10) kurar.
+      - name: Python 3.10 versiyonunu kur
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # YENİ ADDIM: Selenium üçün Chrome və uyğun ChromeDriver-ı avtomatik qurur
-      - name: Chrome və ChromeDriver'ı Qur
+      # 3. Adım: Selenium gibi kütüphanelerin çalışması için gerekli olan Chrome tarayıcı ve sürücüsünü kurar.
+      - name: Chrome ve ChromeDriver'ı kur
         uses: browser-actions/setup-chrome@v1
       
-      # DƏYİŞDİRİLDİ: Asılılıqları requirements.txt faylından yükləyir
-      - name: Asılılıqları yüklə
+      # YENİ VE ÖNEMLİ ADIM: Gerekli Python kütüphanelerini yükler.
+      - name: Gerekli Python kütüphanelerini yükle
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # DƏYİŞDİRİLDİ: Selenium ilə işləyən yeni script-i işə salır
-      - name: Linkləri çıxarma script-ini işə sal
+      # DÜZELTİLDİ: Artık doğru script adını çalıştırıyor.
+      - name: Linkleri çıkaran Python script'ini çalıştır
         run: python extract_m3u8.py
 
-      - name: Yenilənmiş faylları commit et
+      # 6. Adım: Oluşturulan veya güncellenen dosyaları otomatik olarak repository'e kaydeder (commit'ler).
+      - name: Değişiklikleri kaydet
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 m3u8 linkləri avtomatik yeniləndi"
+          # Kayıt (commit) mesajı
+          commit_message: "🔁 Canlı yayın linkleri otomatik olarak güncellendi"
+          # Değişikliklerin hangi dala (branch) kaydedileceği
           branch: main
