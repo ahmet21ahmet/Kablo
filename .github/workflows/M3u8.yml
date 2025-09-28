@@ -34,7 +34,7 @@ jobs:
 
       # DƏYİŞDİRİLDİ: Selenium ilə işləyən yeni script-i işə salır
       - name: Linkləri çıxarma script-ini işə sal
-        run: python extractor.py
+        run: python extract_m3u8.py
 
       - name: Yenilənmiş faylları commit et
         uses: stefanzweifel/git-auto-commit-action@v5
