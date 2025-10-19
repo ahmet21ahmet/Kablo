@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-PROXY_PREFIX = "https://zeroipday-zeroipday.hf.space/proxy/vctplay?url="
+PROXY_PREFIX = ""
 # Çıktı dosyasının adını netleştiriyoruz
 OUTPUT_FILE = "setfilmizlefilm.txt"
 
