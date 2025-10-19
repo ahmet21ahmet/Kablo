@@ -1,0 +1,72 @@
+# İş akışının adı
+name: Film Listesi Güncelleyici
+
+# Bu iş akışının ne zaman çalışacağını belirler
+on:
+  # 1. Manuel olarak tetikleme (GitHub Arayüzündeki "Actions" sekmesinden)
+  workflow_dispatch:
+
+  # 2. Zamanlanmış olarak (schedule)
+  # Bu örnek her gün 03:00 UTC (Türkiye saati ile 06:00) çalışır
+  schedule:
+    - cron: '0 3 * * *'
+
+# İş akışına verilen izinler
+# BURASI ÖNEMLİ: 'contents: write' izni, Action'ın depoya kod yazabilmesi (commit/push) için gereklidir.
+permissions:
+  contents: write
+
+# Çalıştırılacak iş(ler)
+jobs:
+  scrape-and-commit:
+    # İşin çalışacağı sanal makine (Ubuntu'nun son sürümü)
+    runs-on: ubuntu-latest
+
+    # İşin adımları
+    steps:
+      # 1. Adım: Depodaki kodları sanal makineye indirir
+      - name: Kodu Yükle (Checkout)
+        uses: actions/checkout@v4
+
+      # 2. Adım: Python 3.10'u kurar
+      - name: Python 3.10 Kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. Adım: Python bağımlılıklarını kurar (requirements.txt dosyasından)
+      - name: Bağımlılıkları Yükle
+        run: |
+          pip install -r requirements.txt
+          
+      # 4. Adım: Playwright'in ihtiyaç duyduğu tarayıcıları (Chromium) kurar
+      # '--with-deps' bayrağı, Linux sunucularda gereken tüm sistem bağımlılıklarını kurar
+      - name: Playwright Tarayıcılarını Kur
+        run: playwright install chromium --with-deps
+
+      # 5. Adım: Hazırladığımız Python betiğini çalıştırır
+      - name: Scraper Betiğini Çalıştır
+        run: python setfilmizle_scraper.py
+
+      # 6. Adım: Oluşturulan dosyayı depoya geri yükler (Commit & Push)
+      - name: Değişiklikleri Depoya Yaz (Commit & Push)
+        run: |
+          # Git'i Action botu olarak yapılandır
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # Çıktı dosyasını Git'e ekle
+          git add setfilmizlefilm.txt
+          
+          # Değişiklik olup olmadığını kontrol et
+          # Eğer 'git diff' bir değişiklik bulamazsa, sonraki adımları atlar
+          if git diff --staged --quiet; then
+            echo "Değişiklik bulunamadı, commit atılmıyor."
+          else
+            echo "Değişiklikler bulundu, commit atılıyor..."
+            # Değişiklik varsa commit at
+            git commit -m "Film listesi güncellendi (Otomatik Bot)"
+            
+            # Değişiklikleri ana dala (veya main) gönder
+            git push
+          fi
