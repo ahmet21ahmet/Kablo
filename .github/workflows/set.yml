@@ -1,5 +1,5 @@
 # İş akışının adı
-name: Film Listesi Güncelleyici
+name: set Film Listesi Güncelleyici
 
 # Bu iş akışının ne zaman çalışacağını belirler
 on:
