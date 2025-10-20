@@ -12,7 +12,6 @@ on:
     - cron: '0 3 * * *'
 
 # İş akışına verilen izinler
-# BURASI ÖNEMLİ: 'contents: write' izni, Action'ın depoya kod yazabilmesi (commit/push) için gereklidir.
 permissions:
   contents: write
 
@@ -40,7 +39,6 @@ jobs:
           pip install -r requirements.txt
           
       # 4. Adım: Playwright'in ihtiyaç duyduğu tarayıcıları (Chromium) kurar
-      # '--with-deps' bayrağı, Linux sunucularda gereken tüm sistem bağımlılıklarını kurar
       - name: Playwright Tarayıcılarını Kur
         run: playwright install chromium --with-deps
 
@@ -55,17 +53,16 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           
-          # Çıktı dosyasını Git'e ekle
-          git add setfilmizlefilm.txt
+          # GÜNCELLEME: Depoya eklenecek dosya adı .m3u olarak değiştirildi
+          git add setfilmizlefilm.m3u
           
           # Değişiklik olup olmadığını kontrol et
-          # Eğer 'git diff' bir değişiklik bulamazsa, sonraki adımları atlar
           if git diff --staged --quiet; then
             echo "Değişiklik bulunamadı, commit atılmıyor."
           else
             echo "Değişiklikler bulundu, commit atılıyor..."
             # Değişiklik varsa commit at
-            git commit -m "Film listesi güncellendi (Otomatik Bot)"
+            git commit -m "Film M3U listesi güncellendi (Otomatik Bot)"
             
             # Değişiklikleri ana dala (veya main) gönder
             git push
