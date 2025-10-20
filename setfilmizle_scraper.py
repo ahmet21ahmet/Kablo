@@ -8,8 +8,7 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-# GÜNCELLEME: PROXY_PREFIX kaldırıldı.
-# GÜNCELLEME: M3U için özel User-Agent ve Referer eklendi.
+# M3U için özel başlıklar
 M3U_USER_AGENT = "Mozilla/5.0 (Linux; Android 14; 23117RA68G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339.207 Mobile Safari/537.36"
 M3U_REFERER = "https://vctplay.site/"
 OUTPUT_FILE = "setfilmizlefilm.m3u"
@@ -55,7 +54,7 @@ def get_fastplay_embeds_bs(film_url):
                     "Referer": film_url,
                     "X-Requested-With": "XMLHttpRequest"
                 }
-                r = requests.post("https://www.setfilmizle.my/wp-admin/admin-ajax.php", data=payload, headers=ajax_headers, timeout=15)
+                r = requests.post("https://www.setfilmizle.nl/wp-admin/admin-ajax.php", data=payload, headers=ajax_headers, timeout=15)
                 try:
                     data = r.json()
                     embed_url = data.get("data", {}).get("url")
@@ -87,7 +86,7 @@ def gather_film_infos(page):
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page()
-    page.goto("https://www.setfilmizle.my/film/")
+    page.goto("https://www.setfilmizle.nl/film/")
     page.wait_for_selector("article.item.dortlu.movies")
     print("İlk sayfa yüklendi.", flush=True)
     
@@ -105,8 +104,7 @@ with sync_playwright() as p:
     
     all_film_infos = []
     
-    # GÜNCELLEME: 'range(1, max_page + 1)' tüm sayfaları (1'den sonuncuya kadar) gezecektir.
-    # Bu kısım zaten istediğiniz gibiydi, "tüm sayfaları" gezer.
+    # Tüm sayfaları gez
     for current_page in range(1, max_page + 1):
         if current_page > 1:
             try:
@@ -136,29 +134,34 @@ with sync_playwright() as p:
             for future in as_completed(future_to_film):
                 title, fastplay_embeds = future.result()
                 
-                # 'fastplay_embeds' varsa (yani boş değilse) yaz.
                 if fastplay_embeds:
                     for label, emb_url in fastplay_embeds:
                         
-                        # GÜNCELLEME: URL'yi dönüştürme ve formatlama
+                        # URL'yi dönüştürme
                         final_stream_url = ""
                         if "vctplay.site/video/" in emb_url:
-                            # 'https://vctplay.site/video/EuOXgL7q7sRF' linkini
-                            # 'https://vctplay.site/manifests/EuOXgL7q7sRF/master.txt' linkine çevirir
                             final_stream_url = emb_url.replace("/video/", "/manifests/") + "/master.txt"
                         else:
-                            # Beklenmedik bir URL formatı gelirse (veya link bozuksa) atla
                             print(f"Hata: Beklenmeyen embed URL formatı: {emb_url}", flush=True)
                             continue
 
                         # Başlıkta virgül varsa M3U formatını bozabilir, temizleyelim
                         safe_title = title.replace(',', ' ')
                         
-                        # GÜNCELLEME: M3U formatı #EXTINF satırına User-Agent ve Referer eklendi
-                        extinf_line = f'#EXTINF:-1 user-agent="{M3U_USER_AGENT}" referer="{M3U_REFERER}",{safe_title} | {label}'
+                        # ----- GÜNCELLEME -----
+                        # M3U formatı istediğiniz VLC (#EXTVLCOPT) seçeneklerine göre güncellendi
+                        
+                        extinf_line = f'#EXTINF:-1,{safe_title} | {label}'
+                        vlc_user_agent_line = f'#EXTVLCOPT:http-user-agent={M3U_USER_AGENT}'
+                        vlc_referer_line = f'#EXTVLCOPT:http-referrer={M3U_REFERER}'
                         
                         print(f"Bulundu: {safe_title} | {label}", flush=True)
+                        
+                        # Dosyaya yeni formatı yaz
                         fout.write(extinf_line + "\n")
-                        fout.write(final_stream_url + "\n") # Dönüştürülmüş linki yaz
+                        fout.write(vlc_user_agent_line + "\n")
+                        fout.write(vlc_referer_line + "\n")
+                        fout.write(final_stream_url + "\n")
+                        # ----- GÜNCELLEME SONU -----
                         
     print("Tamamlandı! ✅", flush=True)
