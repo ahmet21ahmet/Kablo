@@ -8,9 +8,9 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-PROXY_PREFIX = ""
-# Çıktı dosyasının adını netleştiriyoruz
-OUTPUT_FILE = "setfilmizlefilm.txt"
+PROXY_PREFIX = "https://zeroipday-zeroipday.hf.space/proxy/vctplay?url="
+# 1. GÜNCELLEME: Çıktı dosyası adı .m3u olarak değiştirildi
+OUTPUT_FILE = "setfilmizlefilm.m3u"
 
 def get_fastplay_embeds_bs(film_url):
     headers = {
@@ -53,7 +53,7 @@ def get_fastplay_embeds_bs(film_url):
                     "Referer": film_url,
                     "X-Requested-With": "XMLHttpRequest"
                 }
-                r = requests.post("https://www.setfilmizle.my/wp-admin/admin-ajax.php", data=payload, headers=ajax_headers, timeout=15)
+                r = requests.post("https://www.setfilmizle.nl/wp-admin/admin-ajax.php", data=payload, headers=ajax_headers, timeout=15)
                 try:
                     data = r.json()
                     embed_url = data.get("data", {}).get("url")
@@ -85,7 +85,7 @@ def gather_film_infos(page):
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page()
-    page.goto("https://www.setfilmizle.my/film/")
+    page.goto("https://www.setfilmizle.nl/film/")
     page.wait_for_selector("article.item.dortlu.movies")
     print("İlk sayfa yüklendi.", flush=True)
     
@@ -102,13 +102,13 @@ with sync_playwright() as p:
     print(f"Toplam sayfa: {max_page}", flush=True)
     
     all_film_infos = []
-    # Test için sayfa sayısını 3 ile sınırlayabilirsiniz, tam tarama için max_page + 1 kullanın
-    # Örnek: range(1, 4) -> 1, 2, 3. sayfaları alır
+    
+    # 2. GÜNCELLEME: 'range(1, max_page + 1)' tüm sayfaları (1'den sonuncuya kadar) gezecektir.
     for current_page in range(1, max_page + 1):
         if current_page > 1:
             try:
                 page.click(f"span.page-number[data-page='{current_page}']")
-                time.sleep(1) # Sayfanın yüklenmesi için kısa bir bekleme
+                time.sleep(1) 
                 page.wait_for_selector("article.item.dortlu.movies")
             except Exception as e:
                 print(f"{current_page}. sayfaya geçilemedi: {e}", flush=True)
@@ -123,19 +123,31 @@ with sync_playwright() as p:
     print(f"Toplam film bulundu: {len(all_film_infos)}", flush=True)
     print(f"Tüm filmler embed linkleri ile {OUTPUT_FILE} dosyasına yazılıyor...", flush=True)
     
+    # 3. GÜNCELLEME: Yazma mantığı M3U formatı için güncellendi
     with open(OUTPUT_FILE, "w", encoding="utf-8") as fout:
+        # M3U dosyasının başlığı
+        fout.write("#EXTM3U\n")
+        
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_film = {executor.submit(fetch_embed_info, info): info for info in all_film_infos}
+            
             for future in as_completed(future_to_film):
                 title, fastplay_embeds = future.result()
+                
+                # 4. GÜNCELLEME: 'fastplay_embeds' varsa (yani boş değilse) yaz.
+                # Boşsa (else durumu) HİÇBİR ŞEY YAPMA (boş kalabalık oluşmasın).
                 if fastplay_embeds:
                     for label, emb_url in fastplay_embeds:
-                        line = f"Film: {title} | {label} | EMBED: {PROXY_PREFIX + emb_url}"
-                        print(line, flush=True)
-                        fout.write(line + "\n")
-                else:
-                    line = f"Film: {title} | FastPlay embed bulunamadı!"
-                    print(line, flush=True)
-                    fout.write(line + "\n")
-                    
+                        # Başlıkta virgül varsa M3U formatını bozabilir, temizleyelim
+                        safe_title = title.replace(',', ' ')
+                        
+                        # M3U formatı: #EXTINF satırı ve altındaki URL satırı
+                        extinf_line = f'#EXTINF:-1,{safe_title} | {label}'
+                        url_line = PROXY_PREFIX + emb_url
+                        
+                        print(f"Bulundu: {safe_title} | {label}", flush=True)
+                        fout.write(extinf_line + "\n")
+                        fout.write(url_line + "\n")
+                        
     print("Tamamlandı! ✅", flush=True)
+
