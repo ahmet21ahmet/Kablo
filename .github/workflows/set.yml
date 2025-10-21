@@ -1,5 +1,5 @@
 # İş akışının adı
-name: Set Film Listesi Güncelleyici
+name: SET Film Listesi Güncelleyici
 
 # Bu iş akışının ne zaman çalışacağını belirler
 on:
@@ -53,7 +53,7 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           
-          # GÜNCELLEME: Depoya eklenecek dosya adı .m3u olarak değiştirildi
+          # Depoya eklenecek dosya (bu zaten doğruydu)
           git add setfilmizlefilm.m3u
           
           # Değişiklik olup olmadığını kontrol et
