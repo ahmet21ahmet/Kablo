@@ -55,7 +55,7 @@ def get_fastplay_embeds_bs(film_url):
                     "Referer": film_url,
                     "X-Requested-With": "XMLHttpRequest"
                 }
-                r = requests.post("https://www.setfilmizle.nl/wp-admin/admin-ajax.php", data=payload, headers=ajax_headers, timeout=15)
+                r = requests.post("https://www.setfilmizle.my/wp-admin/admin-ajax.php", data=payload, headers=ajax_headers, timeout=15)
                 try:
                     data = r.json()
                     embed_url = data.get("data", {}).get("url")
@@ -87,7 +87,7 @@ def gather_film_infos(page):
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page()
-    page.goto("https://www.setfilmizle.nl/film/")
+    page.goto("https://www.setfilmizle.my/film/")
     page.wait_for_selector("article.item.dortlu.movies")
     print("İlk sayfa yüklendi.", flush=True)
     
