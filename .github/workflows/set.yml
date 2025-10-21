@@ -32,6 +32,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # Bağımlılıkları önbelleğe alarak hızlandırır
 
       # 3. Adım: Python bağımlılıklarını kurar (requirements.txt dosyasından)
       - name: Bağımlılıkları Yükle
@@ -53,8 +54,8 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           
-          # Depoya eklenecek dosya (bu zaten doğruydu)
-          git add setfilmizlefilm.m3u
+          # Depoya eklenecek dosyayı izlemeye al
+          git add ${{ secrets.OUTPUT_FILENAME || 'setfilmizlefilm.m3u' }}
           
           # Değişiklik olup olmadığını kontrol et
           if git diff --staged --quiet; then
@@ -64,6 +65,6 @@ jobs:
             # Değişiklik varsa commit at
             git commit -m "Film M3U listesi güncellendi (Otomatik Bot)"
             
-            # Değişiklikleri ana dala (veya main) gönder
+            # Değişiklikleri ana dala (main veya master) gönder
             git push
           fi
