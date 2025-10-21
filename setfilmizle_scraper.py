@@ -1,170 +1,205 @@
-# -*- coding: utf-8 -*-
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import requests
-from bs4 import BeautifulSoup
-
-# --- Yapılandırma ---
 # GitHub Actions logları için bu satırlar önemlidir
 sys.stdout.reconfigure(line_buffering=True)
 
-# M3U stream linkleri için kullanılacak sabit User-Agent ve Referer
-M3U_USER_AGENT = "Gecko) Chrome/140.0.7339.207 Mobile Safari/537.36"
-M3U_REFERER = "https://vctplay.site/"
+from playwright.sync_api import sync_playwright
+import requests
+from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import re # Düzenli ifadeler için eklendi
+
+# Sabitler
 OUTPUT_FILE = "setfilmizlefilm.m3u"
-BASE_URL = "https://www.setfilmizle.my"
-# Eş zamanlı çalışacak thread sayısı
-MAX_WORKERS = 15
-# İstekler için zaman aşımı (saniye)
-REQUEST_TIMEOUT = 30
+BASE_SITE_URL = "https://www.setfilmizle.nl"
+# Eski proxy linki kaldırıldı, doğrudan vctplay.site linkleri kullanılacak
+# Eski: PROXY_PREFIX = "https://zeroipday-zeroipday.hf.space/proxy/vctplay?url="
+# Artık doğrudan vctplay.site manifest linkleri kullanılacak
 
-# Genel istekler için kullanılacak Tarayıcı başlık bilgisi
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Language": "en-US,en;q=0.9,tr;q=0.8",
-}
-
-# --- Fonksiyonlar ---
-
-def scrape_all_film_infos():
-    """
-    Sitedeki tüm sayfalari gezerek her filmin adını, linkini ve poster URL'sini toplar.
-    Playwright yerine doğrudan requests kullanarak daha hızlı ve stabil çalışır.
-    """
-    all_films = []
-    page_num = 1
-    while True:
-        # Sayfa URL'sini oluştur: /film/page/1/, /film/page/2/ ...
-        page_url = f"{BASE_URL}/film/page/{page_num}/"
-        print(f"Sayfa {page_num} taranıyor: {page_url}", flush=True)
-        try:
-            response = requests.get(page_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            # Eğer sayfa bulunamadıysa (404), son sayfaya ulaşılmıştır.
-            if response.status_code == 404:
-                print("Son sayfaya ulaşıldı, film arama tamamlandı.", flush=True)
-                break
-            response.raise_for_status()
-
-            soup = BeautifulSoup(response.text, 'html.parser')
-            # Filmleri içeren 'article' etiketlerini bul
-            film_articles = soup.select("div.items article.item")
-            
-            # Eğer sayfada hiç film yoksa, döngüyü sonlandır.
-            if not film_articles:
-                print(f"Sayfa {page_num} üzerinde film bulunamadı, tarama tamamlandı.", flush=True)
-                break
-
-            for article in film_articles:
-                title_tag = article.select_one("h2 a")
-                image_tag = article.select_one(".poster img")
-                
-                if title_tag and image_tag:
-                    title = title_tag.text.strip()
-                    film_link = title_tag['href']
-                    # Resim URL'sini 'data-src' veya 'src'den al
-                    logo_url = image_tag.get('data-src') or image_tag.get('src', '')
-                    all_films.append((title, film_link, logo_url))
-            
-            print(f"-> Bu sayfadan {len(film_articles)} film bilgisi alındı. Toplam: {len(all_films)}", flush=True)
-            page_num += 1
-            time.sleep(0.5) # Sunucuyu yormamak için küçük bir bekleme
-
-        except requests.exceptions.RequestException as e:
-            print(f"Hata: Sayfa {page_num} alınamadı. Hata: {e}", flush=True)
-            break
-            
-    return all_films
-
-def fetch_film_details(film_info):
-    """
-    Tek bir filmin detay sayfasina giderek yayın linklerini çeker.
-    """
-    title, film_link, logo_url = film_info
+def get_fastplay_embeds_bs(film_url):
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": film_url,
+    }
+    embeds = []
     try:
-        response = requests.get(film_link, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+        resp = requests.get(film_url, headers=headers, timeout=15)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        # Film logosu URL'sini çek
+        logo_url = ""
+        poster_img = soup.select_one("div.poster-thumb img")
+        if poster_img and poster_img.get("src"):
+            logo_url = poster_img.get("src")
+        elif poster_img and poster_img.get("data-src"): # Bazı sitelerde data-src kullanılıyor
+            logo_url = poster_img.get("data-src")
 
         playex_div = soup.select_one("div#playex")
         nonce = playex_div.get("data-nonce") if playex_div else None
         if not nonce:
-            return title, logo_url, []
-
-        fastplay_embeds = []
-        player_buttons = soup.select('nav.player a, .idTabs.sourceslist a')
-        for btn in player_buttons:
+            return [] # Nonce yoksa FastPlay kaynağına ulaşılamaz
+            
+        for btn in soup.select('nav.player a, .idTabs.sourceslist a'):
             if btn.get("data-player-name", "").lower() == "fastplay":
                 post_id = btn.get("data-post-id")
                 part_key = btn.get("data-part-key", "")
-                label = "Türkçe Dublaj" if "dublaj" in part_key.lower() else "Türkçe Altyazılı"
+                b_tag = btn.find("b")
+                label_main = b_tag.get_text(strip=True) if b_tag else (btn.get_text(strip=True) or "FastPlay")
                 
-                payload = {"action": "get_video_url", "nonce": nonce, "post_id": post_id, "player_name": "FastPlay", "part_key": part_key}
-                ajax_headers = {**HEADERS, "Referer": film_link, "X-Requested-With": "XMLHttpRequest"}
-                
-                r = requests.post(f"{BASE_URL}/wp-admin/admin-ajax.php", data=payload, headers=ajax_headers, timeout=REQUEST_TIMEOUT)
-                r.raise_for_status()
-                data = r.json()
-                embed_url = data.get("data", {}).get("url")
-                if embed_url and "vctplay.site/video/" in embed_url:
-                    stream_url = embed_url.replace("/video/", "/manifests/") + "/master.txt"
-                    fastplay_embeds.append((label, stream_url))
-        
-        return title, logo_url, fastplay_embeds
-    except Exception as e:
-        print(f"Detay alınırken Hata ('{title}'): {e}", flush=True)
-        return title, logo_url, [] # Hata durumunda boş liste döndür
-
-def format_m3u_entry(group_title, logo_url, title, label, stream_url):
-    """Belirtilen formatta M3U girdisi oluşturur."""
-    safe_title = title.replace(',', '')
-    extinf_line = f'#EXTINF:-1 group-title="{group_title}" tvg-logo="{logo_url}",{safe_title} | {label}'
-    referrer_line = f'#EXTVLCOPT:http-referrer={M3U_REFERER}'
-    user_agent_line = f'#EXTVLCOPT:http-user-agent={M3U_USER_AGENT}'
-    return f"{extinf_line}\n{referrer_line}\n{user_agent_line}\n{stream_url}\n"
-
-def main():
-    # 1. Adım: Sitedeki tüm filmlerin listesini çek
-    all_film_infos = scrape_all_film_infos()
-
-    if not all_film_infos:
-        print("Hiç film bulunamadı. Boş bir M3U dosyası oluşturuluyor.", flush=True)
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as fout:
-            fout.write("#EXTM3U\n")
-        return
-
-    print(f"\nToplam {len(all_film_infos)} film bulundu. Yayın linkleri çekiliyor...", flush=True)
-
-    # 2. Adım: Her film için yayın linklerini paralel olarak çek
-    all_movies_entries, dubbed_entries, subtitled_entries = [], [], []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_film = {executor.submit(fetch_film_details, info): info for info in all_film_infos}
-        for i, future in enumerate(as_completed(future_to_film)):
-            try:
-                title, logo_url, streams = future.result()
-                if streams:
-                    print(f"[{i+1}/{len(all_film_infos)}] '{title}' için {len(streams)} yayın bulundu.", flush=True)
-                    for label, stream_url in streams:
-                        all_movies_entries.append(format_m3u_entry("Tüm Filmler", logo_url, title, label, stream_url))
-                        if "Dublaj" in label:
-                            dubbed_entries.append(format_m3u_entry("Türkçe Dublaj", logo_url, title, label, stream_url))
-                        else:
-                            subtitled_entries.append(format_m3u_entry("Türkçe Altyazılı", logo_url, title, label, stream_url))
+                # Dil etiketlerini belirle
+                if part_key and "dublaj" in part_key.lower():
+                    label = "Türkçe Dublaj"
+                elif part_key and "altyazi" in part_key.lower():
+                    label = "Türkçe Altyazılı"
+                elif not part_key: # part_key yoksa varsayılan olarak Altyazılı kabul et
+                    label = "Türkçe Altyazılı"
                 else:
-                    print(f"[{i+1}/{len(all_film_infos)}] '{title}' için yayın bulunamadı.", flush=True)
-            except Exception as e:
-                print(f"İşlem sırasında kritik hata: {e}", flush=True)
+                    label = label_main # Diğer durumlar için orijinal etiketi kullan
+                
+                payload = {
+                    "action": "get_video_url",
+                    "nonce": nonce,
+                    "post_id": post_id,
+                    "player_name": "FastPlay",
+                    "part_key": part_key
+                }
+                ajax_headers = {
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": film_url,
+                    "X-Requested-With": "XMLHttpRequest"
+                }
+                r = requests.post(f"{BASE_SITE_URL}/wp-admin/admin-ajax.php", data=payload, headers=ajax_headers, timeout=15)
+                try:
+                    data = r.json()
+                    embed_url = data.get("data", {}).get("url")
+                    if embed_url:
+                        # Gelen embed_url: https://zeroipday-zeroipday.hf.space/proxy/vctplay?url=https://vctplay.site/video/EuOXgL7q7sRF
+                        # Bizim istediğimiz: https://vctplay.site/manifests/EuOXgL7q7sRF/master.txt
+                        
+                        # URL'den 'EuOXgL7q7sRF' kısmını çıkarmak için düzenli ifade kullanalım
+                        match = re.search(r'vctplay\.site/video/([^/&#?]+)', embed_url)
+                        if match:
+                            video_id = match.group(1)
+                            # Yeni manifest URL'sini oluştur
+                            manifest_url = f"https://vctplay.site/manifests/{video_id}/master.txt"
+                            embeds.append((label, manifest_url, logo_url)) # Logo URL'sini de ekledik
+                        else:
+                            print(f"Uyarı: Video ID bulunamadı veya embed_url formatı beklenenden farklı: {embed_url}", flush=True)
 
-    # 3. Adım: Sonuçları gruplanmış şekilde dosyaya yaz
-    print("\nDosyaya yazma işlemi başlıyor...", flush=True)
+                except Exception as e:
+                    print(f"Hata AJAX yanıtını işlerken: {e}", flush=True)
+                    pass # JSON parsing hatası veya embed_url yok
+        return embeds
+    except Exception as e:
+        print(f"Hata {film_url} adresini alırken: {e}", flush=True)
+        return []
+
+def fetch_embed_info(film_info):
+    title, rating, anayil, film_link = film_info # logo_url burada çekilmeyecek, get_fastplay_embeds_bs içinde çekilecek
+    fastplay_embeds = get_fastplay_embeds_bs(film_link)
+    # get_fastplay_embeds_bs artık (label, manifest_url, logo_url) tuple'ı döndürüyor
+    return (title, fastplay_embeds)
+
+def gather_film_infos(page):
+    articles = page.query_selector_all("article.item.dortlu.movies")
+    film_infos = []
+    for art in articles:
+        title_element = art.query_selector("h2")
+        title_text = title_element.inner_text().strip() if title_element else "Bilinmeyen Film"
+        
+        film_link_element = art.query_selector(".poster a")
+        film_link = film_link_element.get_attribute("href") if film_link_element else ""
+        
+        if film_link:
+            # film_info tuple'ı şimdi (title, rating, anayil, film_link) olacak
+            # logo_url'i buraya değil, film detay sayfasında çekmek daha doğru
+            film_infos.append((title_text, None, None, film_link)) 
+    return film_infos
+
+# Playwright'i headless modda çalıştır
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto(f"{BASE_SITE_URL}/film/")
+    page.wait_for_selector("article.item.dortlu.movies")
+    print("İlk sayfa yüklendi.", flush=True)
+    
+    max_page = 1
+    try:
+        # Son sayfa numarasını içeren span.last-page elementini kontrol et
+        last_page_element = page.query_selector("span.last-page")
+        if last_page_element:
+            max_page = int(last_page_element.get_attribute("data-page"))
+        else:
+            # Eğer span.last-page yoksa, tüm sayfa numaralarını toplayıp en büyüğünü bul
+            all_numbers = [int(e.get_attribute("data-page")) 
+                           for e in page.query_selector_all("span.page-number") 
+                           if e.get_attribute("data-page") and e.get_attribute("data-page").isdigit()]
+            if all_numbers:
+                max_page = max(all_numbers)
+            else:
+                max_page = 1 # Hiç sayfa numarası bulunamazsa varsayılan 1
+    except Exception as e:
+        print(f"Maksimum sayfa numarası bulunamadı, varsayılan 1 olarak ayarlandı: {e}", flush=True)
+        max_page = 1
+        
+    print(f"Toplam sayfa: {max_page}", flush=True)
+    
+    all_film_infos = []
+    
+    for current_page in range(1, max_page + 1):
+        if current_page > 1:
+            try:
+                # Sayfa URL'sini doğrudan oluşturarak gitmek daha güvenilir olabilir.
+                # Örn: https://www.setfilmizle.my/film/page/2/
+                page.goto(f"{BASE_SITE_URL}/film/page/{current_page}/")
+                time.sleep(1) # Sayfanın yüklenmesi için kısa bir bekleme
+                page.wait_for_selector("article.item.dortlu.movies", timeout=30000) # Selector'ın yüklenmesini bekle
+                print(f"{current_page}. sayfaya başarıyla gidildi.", flush=True)
+            except Exception as e:
+                print(f"Hata: {current_page}. sayfaya geçilemedi veya yüklenemedi: {e}", flush=True)
+                # Sayfa yüklenemezse diğer sayfaları denemeye devam etmek için 'continue' kullanabiliriz
+                # veya tüm işlemi durdurmak için 'break' kullanabiliriz.
+                # Bu senaryoda devam etmek daha iyi bir yaklaşım olabilir.
+                continue 
+                
+        film_infos = gather_film_infos(page)
+        print(f"{current_page}. sayfa film sayısı: {len(film_infos)}", flush=True)
+        all_film_infos.extend(film_infos)
+        
+    browser.close()
+    
+    print(f"Toplam film bulundu: {len(all_film_infos)}", flush=True)
+    print(f"Tüm filmler embed linkleri ile {OUTPUT_FILE} dosyasına yazılıyor...", flush=True)
+    
     with open(OUTPUT_FILE, "w", encoding="utf-8") as fout:
         fout.write("#EXTM3U\n")
-        fout.writelines(all_movies_entries)
-        fout.writelines(dubbed_entries)
-        fout.writelines(subtitled_entries)
-
-    print(f"\nTamamlandı! ✅ Toplam {len(all_movies_entries)} yayın linki {OUTPUT_FILE} dosyasına kaydedildi.", flush=True)
-
-if __name__ == "__main__":
-    main()
+        
+        # ThreadPoolExecutor'da daha fazla eş zamanlı iş parçacığı kullanabiliriz
+        # Çünkü requests ve Beautiful Soup daha hızlıdır. 20 veya 30 denenebilir.
+        with ThreadPoolExecutor(max_workers=20) as executor: 
+            future_to_film = {executor.submit(fetch_embed_info, info): info for info in all_film_infos}
+            
+            for future in as_completed(future_to_film):
+                title, fastplay_embeds_with_logo = future.result() # Artık logo_url de burada
+                
+                if fastplay_embeds_with_logo:
+                    for label, manifest_url, logo_url in fastplay_embeds_with_logo:
+                        safe_title = title.replace(',', ' ').replace('"', "'") # M3U formatı için virgül ve tırnak temizliği
+                        
+                        # M3U formatı güncellendi
+                        extinf_line = f'#EXTINF:-1 tvg-id="{safe_title.replace(" ", "_")}" tvg-name="{safe_title} | {label}" tvg-logo="{logo_url}" group-title="Filmler", {safe_title} | {label}'
+                        
+                        # Yeni istenen EXTVLCOPT satırları
+                        vlc_user_agent = "Mozilla/5.0 (Linux; Android 14; 23117RA68G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339.207 Mobile Safari/537.36"
+                        vlc_referer = "https://vctplay.site/"
+                        extvlcopt_user_agent = f'#EXTVLCOPT:http-user-agent={vlc_user_agent}'
+                        extvlcopt_referer = f'#EXTVLCOPT:http-referrer={vlc_referer}'
+                        
+                        print(f"Bulundu: {safe_title} | {label}", flush=True)
+                        fout.write(extinf_line + "\n")
+                        fout.write(extvlcopt_user_agent + "\n")
+                        fout.write(extvlcopt_referer + "\n")
+                        fout.write(manifest_url + "\n")
+                        
+    print("Tamamlandı! ✅", flush=True)
