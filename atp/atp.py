@@ -284,5 +284,405 @@ def find_m3u8_url(page_url):
         print(f"Hata oluştu: {e}")
         return [], [], [], {}
 
-def analyze_vidlax_direct(embed_url):
     """Vidlax embed URL'sini doğrudan analiz eder (find_m3u8_url tarafından zaten yapılıyor, bu artık fazlalık)"""
+    return find_m3u8_url(embed_url)
+
+
+def decode_base64_strings(content):
+    """Base64 kodlanmış stringleri decode eder"""
+    base64_patterns = [
+        r'atob\(["\']([A-Za-z0-9+/=]+)["\']',
+        # Daha uzun base64 stringlerini yakalamak için (20 karakterden fazla)
+        r'["\']([A-Za-z0-9+/=]{20,})["\']' 
+    ]
+    decoded_strings = []
+    for pattern in base64_patterns:
+        matches = re.findall(pattern, content)
+        for match in matches:
+            # Base64 stringini kontrol et, genellikle 4'ün katı uzunlukta olmalı
+            if len(match) % 4 == 0:
+                try:
+                    decoded = base64.b64decode(match).decode('utf-8')
+                    if '.m3u8' in decoded and not decoded.startswith('//'): # Bazen decode yanlış olur
+                        decoded_strings.append(decoded)
+                        print(f"      🔓 Base64 decode edildi: {decoded}")
+                except Exception:
+                    pass
+    return decoded_strings
+
+def extract_episode_links(series_url):
+    """Dizi ana sayfasından tüm bölüm linklerini, posteri, backdrop ve grubu çıkarır"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'tr-TR,tr;q=0.8,en-US;q=0.5,en;q=0.3',
+            'Accept-Encoding': 'gzip, deflate',
+            'Referer': 'https://diziyiizle.com/',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        response = requests.get(series_url, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        episode_links = []
+
+        # 1. Poster ve Backdrop URL'lerini bul
+        poster_url = None
+        backdrop_url = None
+
+        # Poster'i bulmak için öncelikli yollar (genellikle serinin görselidir)
+        img_poster = soup.select_one('img[src*="series_poster_"]') or soup.select_one('div.overflow-hidden img')
+        if img_poster and img_poster.get('src'):
+            poster_url = img_poster['src'].strip()
+
+        # Backdrop'u bulmak için (genellikle arkaplan görselidir)
+        img_backdrop = soup.select_one('img[src*="series_backdrop_"]') or soup.select_one('div.absolute.inset-0 img') or soup.select_one('div.relative img')
+        if img_backdrop and img_backdrop.get('src'):
+            backdrop_url = img_backdrop['src'].strip()
+
+        # Meta etiketlerden (Open Graph) yedekleme
+        if (not poster_url or poster_url.startswith('data:image')) and soup.find('meta', property='og:image'):
+            meta_img = soup.find('meta', property='og:image')
+            if meta_img and meta_img.get('content') and not meta_img['content'].startswith('data:image'):
+                poster_url = meta_img['content'].strip()
+                if not backdrop_url: # Backdrop bulunamazsa, posteri backdrop olarak da kullan
+                    backdrop_url = poster_url
+
+        # 2. Grup adını (Platform) bul
+        group_name = None
+        h4 = soup.find(lambda tag: tag.name == 'h4' and 'Platform' in tag.get_text())
+        if h4:
+            sibling = h4.find_next_sibling()
+            if sibling:
+                span_tag = sibling.select_one('span') or sibling.find('span')
+                if span_tag:
+                    group_name = ' '.join(span_tag.get_text(strip=True).split())
+        if not group_name:
+            # Yedek: Platform etiketleri veya linkleri
+            span_fallback = soup.select_one('div.flex.flex-wrap.gap-2 span') or soup.select_one('a[href*="/platform/"]')
+            if span_fallback:
+                group_name = ' '.join(span_fallback.get_text(strip=True).split())
+
+        # 3. Bölüm linklerini bul
+        episode_patterns = [
+            'a[href*="/sezon-"][href*="-bolum/"]',
+            'a[href*="-bolum/"]',
+        ]
+
+        # Benzersiz linkler için set kullan
+        unique_episode_urls = set()
+
+        for pattern in episode_patterns:
+            links = soup.select(pattern)
+            for link in links:
+                href = link.get('href')
+                if href and 'bolum' in href:
+                    if href.startswith('/'):
+                        full_url = 'https://diziyiizle.com' + href
+                    elif href.startswith('http'):
+                        full_url = href
+                    else:
+                        # Bağıl ama / ile başlamayan (örneğin: "sezon-1-bolum-1/") durumlar
+                        full_url = series_url.rstrip('/') + '/' + href.lstrip('/')
+
+                    if full_url not in unique_episode_urls:
+                        unique_episode_urls.add(full_url)
+                        episode_text = link.get_text(strip=True)
+                        episode_links.append((full_url, episode_text))
+                        print(f"   📺 Bölüm bulundu: {episode_text} - {full_url}")
+
+        print(f"\n   📊 Toplam {len(episode_links)} bölüm bulundu. Poster: {poster_url or 'Yok'}")
+
+        return episode_links, poster_url, backdrop_url, group_name
+
+    except Exception as e:
+        print(f"❌ Dizi sayfası analiz hatası ({series_url}): {e}")
+        return [], None, None, None
+
+def create_m3u_playlist(entries, series_url, filename_prefix=""):
+    """m3u8 playlist dosyası oluşturur"""
+    try:
+        series_name = series_url.split('/')[-2] if series_url.endswith('/') else series_url.split('/')[-1]
+        series_name = series_name.replace('dizi/', '').replace('-', '_')
+
+        if filename_prefix:
+            filename = f"playlists/{filename_prefix}_{series_name}.m3u"
+        else:
+            filename = f"playlists/{series_name}_playlist.m3u"
+
+        os.makedirs('playlists', exist_ok=True)
+
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write("#EXTM3U\n")
+            f.write(f"# {series_name.upper().replace('_', ' ')} - TÜM BÖLÜMLER\n")
+            f.write(f"# Oluşturma Tarihi: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Toplam Bölüm: {len(entries)}\n")
+            f.write(f"# Dizi URL: {series_url}\n")
+
+            # İlk girişten ortak meta verileri yaz (poster, backdrop, grup)
+            if entries and entries[0].get('poster'):
+                f.write(f"# Poster: {entries[0]['poster']}\n")
+            if entries and entries[0].get('backdrop'):
+                f.write(f"# Backdrop: {entries[0]['backdrop']}\n")
+            if entries and entries[0].get('group'):
+                f.write(f"# Grup: {entries[0]['group']}\n")
+            f.write("\n")
+
+            for entry in entries:
+                # M3U niteliklerini oluştur
+                tvg_logo = entry.get('poster') or entry.get('backdrop') or ''
+                attrs = []
+                if tvg_logo:
+                    attrs.append(f'tvg-logo="{tvg_logo}"')
+                if entry.get('group'):
+                    attrs.append(f'group-title="{entry["group"]}"')
+
+                attr_str = ' '.join(attrs)
+
+                # EXTINF satırı
+                f.write(f'#EXTINF:-1 {attr_str},{entry["title"]}\n')
+
+                # Altyazı Bilgisi (VLC ve bazı oynatıcılar için)
+                if entry.get('subtitles'):
+                    for sub in entry['subtitles']:
+                        # EXTVLCSUB: VLC için altyazı yolu. Diğer oynatıcılar (Kodi, Perfect Player) farklı etiketler kullanabilir.
+                        # En yaygın olanı #EXTVLCSUB
+                        f.write(f'#EXTVLCSUB:{sub["url"]}\n') 
+                        f.write(f'#EXTVLCSUB-TITLE:{sub.get("label", "Altyazı")}\n')
+                        f.write(f'#EXTVLCSUB-LANGUAGE:{sub.get("label", "tr")}\n')
+
+                # Video URL'si
+                f.write(f"{entry['url']}\n\n")
+
+        print(f"   📁 Playlist dosyası oluşturuldu: {filename}")
+        return filename
+    except Exception as e:
+        print(f"❌ Playlist oluşturma hatası: {e}")
+        return None
+
+def create_master_playlist(entries):
+    """Tüm diziler için master playlist dosyası oluşturur"""
+    try:
+        filename = "master_all_series_playlist.m3u"
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write("#EXTM3U\n")
+            f.write(f"# TÜM DİZİLER - MASTER PLAYLIST\n")
+            f.write(f"# Oluşturma Tarihi: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Toplam Bölüm: {len(entries)}\n\n")
+
+            series_groups = {}
+            for entry in entries:
+                # Dizinin URL'sini temizle ve grup anahtarı olarak kullan
+                series_url = entry['series_url'].rstrip('/')
+                series_groups.setdefault(series_url, []).append(entry)
+
+            for series_url, series_entries in series_groups.items():
+                series_name = series_url.split('/')[-1].replace('-', ' ').upper()
+                f.write(f"\n# === {series_name} === ({len(series_entries)} bölüm)\n")
+
+                # Grup başlığını ve logoları buraya da ekle
+                group_title = series_entries[0].get('group', 'Dizi')
+                f.write(f'#EXTGRP:{group_title}\n') # Playlist grubunu tanımla
+
+                if series_entries[0].get('poster'):
+                    f.write(f"# Poster: {series_entries[0]['poster']}\n")
+                if series_entries[0].get('backdrop'):
+                    f.write(f"# Backdrop: {series_entries[0]['backdrop']}\n")
+
+                for entry in series_entries:
+                    tvg_logo = entry.get('poster') or entry.get('backdrop') or ''
+                    attrs = []
+                    if tvg_logo:
+                        attrs.append(f'tvg-logo="{tvg_logo}"')
+
+                    # group-title M3U standardına göre her EXTINF'te olmalıdır
+                    attrs.append(f'group-title="{entry.get("group", "Dizi")}"') 
+                    attr_str = ' '.join(attrs)
+
+                    f.write(f'#EXTINF:-1 {attr_str},{entry["title"]}\n')
+
+                    # Altyazı Bilgisi
+                    if entry.get('subtitles'):
+                        for sub in entry['subtitles']:
+                            f.write(f'#EXTVLCSUB:{sub["url"]}\n')
+                            f.write(f'#EXTVLCSUB-TITLE:{sub.get("label", "Altyazı")}\n')
+                            f.write(f'#EXTVLCSUB-LANGUAGE:{sub.get("label", "tr")}\n')
+
+                    f.write(f"{entry['url']}\n\n")
+
+        print(f"\n📁 Master playlist oluşturuldu: {filename}")
+    except Exception as e:
+        print(f"❌ Master playlist hatası: {e}")
+
+def extract_all_series_links(series_page_url):
+    """Tüm dizilerin linklerini çıkarır"""
+    # Bu fonksiyon orijinal betikte zaten iyi çalışıyordu, küçük bir düzenleme ile devam
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'tr-TR,tr;q=0.8,en-US;q=0.5,en;q=0.3',
+            'Accept-Encoding': 'gzip, deflate',
+            'Referer': 'https://diziyiizle.com/',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        response = requests.get(series_page_url, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        series_links = []
+        unique_links = set()
+
+        series_patterns = [
+            'a[href*="/dizi/"]',
+            'a[href*="/series/"]',
+            'a[href*="/show/"]'
+        ]
+
+        # 1. Mevcut sayfadaki linkleri bul
+        for pattern in series_patterns:
+            links = soup.select(pattern)
+            for link in links:
+                href = link.get('href')
+                if href and 'bolum' not in href and '#' not in href and href != '/dizi/':
+                    if href.startswith('/'):
+                        full_url = 'https://diziyiizle.com' + href
+                    elif href.startswith('http'):
+                        full_url = href
+                    else:
+                        full_url = 'https://diziyiizle.com/' + href
+
+                    # URL'yi temizle ve ekle
+                    full_url = full_url.split('?')[0].rstrip('/')
+                    if full_url not in unique_links:
+                        unique_links.add(full_url)
+                        series_links.append(full_url)
+                        print(f"   📺 Dizi bulundu: {full_url}")
+
+        # 2. Sayfalamayı kontrol et (ilk sayfadan toplananlar yeterli olmazsa)
+        # Bu kısım zaman alıcı olabileceği için varsayılan olarak basitleştirilmiştir.
+
+        print(f"\n   📊 Toplam {len(series_links)} dizi bulundu")
+        return series_links
+
+    except Exception as e:
+        print(f"❌ Dizi listesi çıkarım hatası: {e}")
+        return []
+
+def process_all_series(series_page_url, max_series=None):
+    """Tüm dizileri işler"""
+    try:
+        print(f"🌟 PROCESS ALL: {series_page_url}")
+        series_links = extract_all_series_links(series_page_url)
+
+        if not series_links:
+            print("❌ Hiç dizi bulunamadı.")
+            return
+
+        if max_series and isinstance(max_series, int):
+            series_links = series_links[:max_series]
+
+        all_entries = []
+
+        for idx, series_url in enumerate(series_links, 1):
+            print(f"\n{'='*60}")
+            print(f"🎬 [{idx}/{len(series_links)}] İşleniyor: {series_url}")
+
+            if series_url == "https://diziyiizle.com/dizi":
+                print("   ❌ Kategori sayfası atlandı")
+                continue
+
+            try:
+                # ep_links (bölüm URL'si, bölüm adı) tuple listesidir
+                ep_links_info, poster, backdrop, group = extract_episode_links(series_url)
+
+                if not ep_links_info:
+                    print("   ❌ Bu dizide bölüm bulunamadı")
+                    continue
+
+                series_entries = []
+
+                for j, (ep_url, ep_title_text) in enumerate(ep_links_info, 1):
+                    print(f"   🔍 [{j}/{len(ep_links_info)}] Bölüm: {ep_url}")
+
+                    try:
+                        # find_m3u8_url artık hem m3u8'leri hem de altyazıları çekiyor
+                        m3u8s, subtitles, embed_urls, vinfo = find_m3u8_url(ep_url)
+
+                        if m3u8s:
+                            # Bölüm adını video bilgisinden veya linkten al
+                            title_from_vinfo = vinfo.get('title', '').strip()
+                            desc_from_vinfo = vinfo.get('description', '').strip()
+
+                            if title_from_vinfo and desc_from_vinfo and title_from_vinfo != desc_from_vinfo:
+                                ep_title = f"{title_from_vinfo} - {desc_from_vinfo}"
+                            elif title_from_vinfo:
+                                ep_title = title_from_vinfo
+                            else:
+                                ep_title = ep_title_text or f"Bölüm {j}"
+
+                            # Her m3u8 URL'si için bir giriş oluştur
+                            for u in m3u8s:
+                                entry = {
+                                    'title': ep_title,
+                                    'url': u,
+                                    'episode_url': ep_url,
+                                    'series_url': series_url,
+                                    'poster': poster,
+                                    'backdrop': backdrop,
+                                    'group': group,
+                                    'subtitles': subtitles # Altyazıları buraya ekle
+                                }
+                                series_entries.append(entry)
+                                all_entries.append(entry)
+
+                            print(f"      ✅ {ep_title} - {len(m3u8s)} m3u8, {len(subtitles)} altyazı")
+                        else:
+                            print("      ❌ m3u8 bulunamadı")
+
+                    except Exception as e:
+                        print(f"      ❌ Bölüm işleme hatası: {e}")
+
+                    # Her 5 bölümden sonra biraz bekleme
+                    if j % 5 == 0:
+                        time.sleep(1)
+
+                if series_entries:
+                    # Dizi bazında playlist oluştur
+                    create_m3u_playlist(series_entries, series_url, filename_prefix="individual")
+                    print(f"   ✅ Dizi tamamlandı: {len(series_entries)} m3u8 eklendi")
+                else:
+                    print("   ❌ Bu dizi için hiç m3u8 bulunamadı")
+
+            except Exception as e:
+                print(f"   ❌ Dizi ana sayfa hatası: {e}")
+
+            # Her dizi arasında bekleme
+            time.sleep(1.5)
+
+        if all_entries:
+            # Tüm diziler için master playlist oluştur
+            create_master_playlist(all_entries)
+            print(f"\n📁 Tüm diziler için master playlist oluşturuldu ({len(all_entries)} item).")
+        else:
+            print("\n❌ Hiç m3u8 bulunamadı, master playlist oluşturulmadı.")
+
+    except Exception as e:
+        print(f"❌ process_all_series genel hata: {e}")
+
+def main():
+    # Tüm diziler sayfası URL'si
+    all_series_url = "https://diziyiizle.com/?post_type=series"
+    # Tüm dizileri çekmek için None, test için küçük bir sayı (örn. 5) verebilirsiniz.
+    max_series_limit = None 
+
+    print("🚀 TÜM DİZİLERİN M3U8 VE ALTYAZILARI TOPLANIYOR")
+    print("⚡ FULL MODE: Tüm diziler işlenecek!")
+    print("⏰ Bu işlem uzun sürebilir...")
+
+    process_all_series(all_series_url, max_series=max_series_limit)
+
+if __name__ == "__main__":
+    main()
