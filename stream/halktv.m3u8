@@ -2,4 +2,4 @@
 #EXT-X-VERSION:3
 #EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="video",NAME="720p",AUTOSELECT=YES,DEFAULT=YES
 #EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=1280x720
-https://nowtv.daioncdn.net/nowtv/nowtv.m3u8?ce=3&app=mobile_web&st=GfHM-u1HyVXhTJF-CIzR5Q&e=1763496838
+https://halktv.daioncdn.net/halktv/halktv.m3u8?app=c86957d3-74a7-44da-9ad2-dc358c769609&ce=3
